@@ -1,0 +1,11 @@
+pub mod analysis;
+pub mod cli;
+pub mod error;
+pub mod index;
+pub mod model;
+pub mod parser;
+pub mod report;
+pub mod scanner;
+pub mod search;
+pub mod storage;
+pub mod ui;
