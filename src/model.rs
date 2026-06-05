@@ -131,3 +131,9 @@ pub enum SearchMode {
     Any,
     All,
 }
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SearchStrategy {
+    Bm25,
+    Hybrid,
+}

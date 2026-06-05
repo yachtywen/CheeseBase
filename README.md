@@ -1,206 +1,402 @@
-# RustNoteSearch
+# CheeseBase
 
-## 正式知识库使用方式
+CheeseBase 是一个基于 Rust 实现的本地知识库混合检索系统，面向课程笔记、代码文件、数据库资料和论文 PDF 等个人学习资料管理场景。用户将文件放入 `knowledge_base/` 目录后，程序可以递归扫描文档、解析正文、构建本地索引，并通过 CLI 或 TUI 完成检索、预览和文件跳转。
 
-本项目的正式知识库目录为 `knowledge_base/`。用户可以手动添加、删除、移动其中的文件和子文件夹；程序不会限制目录层级。修改知识库内容后，需要更新索引：
+项目默认使用 BM25 本地关键词检索；如果配置了阿里云百炼 DashScope Embedding 和本地 Qdrant，也可以启用 BM25 + 向量检索的 Hybrid 混合检索。
 
-```bash
-cargo run -- index knowledge_base
+项目全名：
+
+```text
+CheeseBase：基于 Rust、BM25 与向量数据库的本地知识库混合检索系统
 ```
-
-也可以在 TUI 中输入 `/update` 直接重新扫描当前知识库根目录并保存索引。
-
-TUI 启动后默认进入封面命令模式：
-
-- `/help`：展示所有 TUI 命令。
-- `/files`：展示当前索引中的知识库目录。
-- `/terms`：展示词频排序。
-- `/stats`：展示索引统计。
-- `/update`：更新索引。
-- `/select`：进入搜索页面。
-- `/quit`：退出。
-
-推荐演示命令：
-
-```bash
-cargo run -- index knowledge_base
-cargo run -- stats
-cargo run -- search ownership
-cargo run -- search 事务
-cargo run -- tui
-```
-
-## 本轮优化说明
-
-- 搜索结果现在支持同一文档内的多个命中片段，CLI 会按 `match 1`、`match 2` 展示，TUI 预览区会同步列出多处命中。
-- PDF 正文命中会记录页码，CLI 和 TUI 会以 `p.页码` 的形式展示，方便用户手动定位到对应页面。
-- PDF 文件仍通过系统默认程序打开；本轮不做 PDF 阅读器级别的精确页内跳转。
-- 索引格式版本已升级到 `3`，旧的 `index.json` 需要重新运行 `cargo run -- index knowledge_base` 生成。
-
-RustNoteSearch 是一个使用 Rust 编写的本地知识库搜索工具。它可以扫描 Markdown、纯文本、Rust 源码、TOML 配置文件和文本型 PDF，构建 JSON 格式的倒排索引，并支持基于 BM25 的命令行搜索和轻量级终端 TUI 搜索界面。
-
-
-本项目面向 Rust 课程大作业设计，可以直接在本地 Windows 环境运行，不需要 Docker 或其他容器环境。
 
 ## 功能特性
 
-- 递归扫描本地文件夹。
+- 支持正式知识库目录 `knowledge_base/`，用户可以自由添加、删除、移动文件和子文件夹。
+- 支持递归扫描多级目录。
 - 支持 `.md`、`.txt`、`.rs`、`.toml`、`.pdf` 文件。
-- 自动跳过 `.git`、`target` 和隐藏目录。
-- 自动提取 Markdown 标题。
-- 支持英文、代码标识符和基于 `jieba-rs` 的中文分词。
-- 构建包含词频和位置的倒排索引。
-- 使用可读的 JSON 文件保存和加载索引。
-- 使用 BM25 算法进行相关度排序，支持命中词展示和命中片段预览。
-- 提供简单的 TUI 交互式搜索界面，支持 Enter 或鼠标点击打开搜索结果文件。
-- 提供索引统计、高频词分析、单文档分析和 Markdown 报告导出。
-- 包含单元测试和集成测试。
+- 支持文本型 PDF 正文提取和页码提示。
+- 支持基于 `jieba-rs` 的中文分词，以及英文、数字、代码标识符分词。
+- 支持倒排索引构建，并使用 JSON 保存为 `index.json`。
+- 支持 BM25 相关度排序。
+- 支持同一文档内多处命中片段展示。
+- 支持 Qdrant + DashScope Embedding 的 Hybrid 混合检索。
+- 支持 CLI 命令和终端 TUI 两种交互方式。
+- TUI 支持首页、帮助页、目录页、词频页、统计页、策略选择页和搜索页。
+- TUI 支持 `/update` 更新索引、`/strategy` 选择检索策略、Enter 或鼠标点击打开文件。
+- 包含单元测试和集成测试，方便验证核心功能。
+
+## 环境要求
+
+基础 BM25 功能只需要 Rust 工具链：
+
+- Windows / macOS / Linux
+- Rust stable
+- Cargo
+
+安装 Rust：
+
+```bash
+rustup --version
+cargo --version
+```
+
+如果命令不可用，请先安装 Rust：
+
+```text
+https://www.rust-lang.org/tools/install
+```
+
+Windows 用户需要确认 Cargo 路径已经加入环境变量：
+
+```text
+C:\Users\<你的用户名>\.cargo\bin
+```
+
+Hybrid 混合检索额外需要：
+
+- 本地 Qdrant 服务
+- 阿里云百炼 / DashScope API Key
+- `.env` 配置文件
 
 ## 快速开始
 
+进入项目目录：
+
 ```bash
-cd /d D:\AGENT_workspace\rust大作业\rust-note-search
+cd rust-note-search
+```
+
+构建项目：
+
+```bash
 cargo build
+```
+
+构建本地知识库索引：
+
+```bash
 cargo run -- index knowledge_base
+```
+
+查看索引统计：
+
+```bash
 cargo run -- stats
-cargo run -- search ownership
-cargo run -- search 所有权
-cargo run -- terms
-cargo run -- inspect 0
-cargo run -- report
+```
+
+执行 BM25 搜索：
+
+```bash
+cargo run -- search ownership --strategy bm25
+cargo run -- search 所有权 --strategy bm25
+```
+
+打开 TUI：
+
+```bash
 cargo run -- tui
 ```
 
-默认情况下，索引会保存到 `index.json`。
-
 ## 命令说明
 
-
-构建索引：
+### 构建索引
 
 ```bash
 cargo run -- index knowledge_base
 ```
 
-构建索引并保存到指定文件：
+指定输出索引文件：
 
 ```bash
-cargo run -- index knowledge_base -o knowledge-index.json
+cargo run -- index knowledge_base -o index.json
 ```
 
-执行搜索：
+### 搜索
+
+默认使用 BM25：
 
 ```bash
-cargo run -- search "ownership borrowing"
-cargo run -- search "所有权"
+cargo run -- search "rust ownership"
 ```
 
-使用指定索引文件并限制结果数量：
+指定搜索策略：
 
 ```bash
-cargo run -- search "rust trait" -i knowledge-index.json -n 5
+cargo run -- search "rust ownership" --strategy bm25
+cargo run -- search "事务隔离级别" --strategy hybrid
 ```
 
-要求搜索结果同时包含所有查询词：
+限制返回数量：
+
+```bash
+cargo run -- search "trait" -n 5
+```
+
+要求查询词全部命中：
 
 ```bash
 cargo run -- search "ownership borrowing" --mode all
 ```
 
-查看索引统计信息：
+### 查看统计
 
 ```bash
 cargo run -- stats
 ```
 
-查看高频词：
+### 查看高频词
 
 ```bash
-cargo run -- terms -n 15
+cargo run -- terms
+cargo run -- terms -n 30
 ```
 
-按文档编号查看单个文档的分析结果：
+### 查看单个文档分析
 
 ```bash
 cargo run -- inspect 0
 ```
 
-导出 Markdown 报告：
+### 导出索引报告
 
 ```bash
+cargo run -- report
 cargo run -- report -o index-report.md
 ```
 
-打开终端 TUI：
+### 构建向量索引
+
+使用 Hybrid 检索前，需要先构建本地 BM25 索引，再构建 Qdrant 向量索引：
+
+```bash
+cargo run -- index knowledge_base
+cargo run -- vector-index
+```
+
+## Hybrid 检索配置
+
+Hybrid 检索需要 `.env` 文件。请复制模板：
+
+```bash
+copy .env.example .env
+```
+
+macOS / Linux：
+
+```bash
+cp .env.example .env
+```
+
+然后填写自己的 DashScope API Key：
+
+```text
+EMBED_MODEL_TYPE=dashscope
+EMBED_MODEL_NAME=text-embedding-v3
+EMBED_API_KEY=your_dashscope_api_key_here
+EMBED_BASE_URL=https://dashscope.aliyuncs.com/compatible-mode/v1
+EMBED_DIMENSIONS=1024
+
+QDRANT_URL=http://localhost:6333
+QDRANT_COLLECTION=cheesebase_chunks
+HYBRID_SCORE_THRESHOLD=0.45
+```
+
+注意：
+
+- 不要把真实 `.env` 提交到 GitHub。
+- 当前 `.gitignore` 已忽略 `.env`。
+- `.env.example` 只保留占位符，方便别人了解配置项。
+
+`HYBRID_SCORE_THRESHOLD` 是混合检索结果阈值，范围为 `0.0` 到 `1.0`。数值越高，结果越少但通常更相关。默认值为 `0.45`。
+
+Hybrid 得分融合公式：
+
+```text
+bm25_norm = bm25_score / max_bm25_score
+vector_norm = clamp(vector_score, 0.0, 1.0)
+hybrid_score = 0.45 * bm25_norm + 0.55 * vector_norm
+```
+
+## TUI 使用说明
+
+启动：
 
 ```bash
 cargo run -- tui
 ```
 
-TUI 按键说明：
+TUI 默认进入首页，可以输入以下命令：
 
-- 直接输入内容进行搜索。
-- 使用 Backspace 删除字符。
-- 使用 Up / Down 选择搜索结果。
-- 按 Enter 打开当前选中的搜索结果文件。
-- 鼠标点击 Results 列表中的结果项可直接打开文件。
-- 使用 Esc 退出。
-- 当输入框为空时，按 `q` 退出。
+```text
+/help      查看帮助
+/select    进入搜索页
+/home      返回首页
+/files     查看知识库文件目录
+/terms     查看高频词
+/stats     查看索引统计
+/strategy  选择 BM25 或 Hybrid 检索策略
+/update    重新扫描知识库并更新索引
+/clear     清空搜索输入
+/quit      退出程序
+```
+
+搜索页支持：
+
+- 直接输入关键词实时搜索。
+- Up / Down 选择搜索结果。
+- Enter 打开当前选中的文件。
+- 鼠标点击结果列表中的文件打开。
+- 鼠标滚轮滚动 Preview 区域，查看同一文档中的多个命中片段。
+- 输入 `/strategy` 切换 BM25 或 Hybrid。
+- 输入 `/update` 更新索引。
 
 ## 项目结构
 
-项目按照职责拆分为多个模块：
+```text
+rust-note-search/
+  Cargo.toml
+  README.md
+  .env.example
+  knowledge_base/
+  src/
+    main.rs
+    lib.rs
+    cli.rs
+    config.rs
+    embedding.rs
+    error.rs
+    hybrid.rs
+    index.rs
+    model.rs
+    parser.rs
+    scanner.rs
+    search.rs
+    storage.rs
+    ui.rs
+    vector.rs
+  tests/
+```
+
+核心模块说明：
 
 - `cli`：命令行参数和子命令定义。
-- `error`：统一的 `AppError` 和 `AppResult` 错误处理。
-- `model`：核心数据结构和枚举类型。
-- `scanner`：目录遍历和文件过滤。
-- `parser`：标题提取、PDF 文本提取、英文/代码标识符分词和 `jieba-rs` 中文分词。
+- `error`：统一 `AppError` 和 `AppResult` 错误处理。
+- `model`：文档、索引、搜索结果和检索策略等核心数据结构。
+- `scanner`：目录递归扫描和文件类型过滤。
+- `parser`：文本解析、PDF 提取、标题提取和分词。
 - `index`：并发构建倒排索引。
-- `storage`：JSON 索引持久化。
-- `search`：BM25 搜索排序和命中片段生成。
-- `analysis`：索引统计、高频词和单文档分析。
+- `search`：BM25 检索、排序和命中片段生成。
+- `storage`：JSON 索引保存与加载。
+- `vector`：chunk 切分、Qdrant 写入和向量检索。
+- `embedding`：DashScope Embedding 客户端。
+- `hybrid`：BM25 与向量检索结果融合。
+- `config`：读取 `.env` 和环境变量配置。
+- `analysis`：索引统计、高频词和文档分析。
 - `report`：Markdown 报告导出。
-- `ui`：终端 TUI 用户界面。
+- `ui`：终端 TUI 界面。
 
-## Rust 特性体现
+## Rust 工程实践
 
-- 所有权与借用：在文件内容解析、token 处理和索引构建中控制数据所有权和借用关系。
-- `struct`：用于表示文档、倒排项、索引元信息、搜索结果和分析结果。
-- `enum`：用于表示文件类型、搜索状态、搜索模式和应用错误。
-- `trait`：使用 `Tokenizer` 抽象分词策略，默认实现内部使用 `jieba-rs` 处理中文。
-- 泛型：用于搜索引擎的分词器参数、JSON 读写辅助函数和通用截断逻辑。
-- `Result` 错误处理：贯穿文件 I/O、JSON 解析、索引构建、搜索和 TUI。
-- 并发：使用 `rayon` 并发解析多个文件，再汇总生成倒排索引。
-- 模块化：项目拆分为多个清晰模块，满足课程对工程结构的要求。
-- PDF 解析：使用 `pdf-extract` 支持文本型 PDF 内容检索。
-- 文件跳转：TUI 中可通过 Enter 或鼠标点击打开命中的本地文件。
+本项目重点体现以下 Rust 工程能力：
 
-## 测试
+- 模块化设计：通过 `lib.rs` 拆分并导出多个功能模块。
+- crate 管理：项目由 `Cargo.toml` 管理依赖和构建流程。
+- 错误处理：使用 `AppResult<T> = Result<T, AppError>` 统一错误返回。
+- 错误传播：使用 `?` 传播 IO、JSON、PDF、HTTP、Qdrant 等错误。
+- ownership / borrowing：文档正文由 `Document` 拥有，搜索阶段借用 `InvertedIndex`。
+- struct / enum：使用结构体建模文档、索引、搜索结果，使用枚举表达文件类型、搜索策略和错误类型。
+- trait：使用 `Tokenizer` 抽象分词器。
+- 泛型：索引构建器、搜索引擎、TUI 和 JSON 读写使用泛型提高复用性。
+- 生命周期：`SearchEngine<'a, T>` 借用索引并通过生命周期保证引用安全。
+- 并发：使用 `rayon` 并发解析多个文件。
+- 测试：包含单元测试和集成测试。
 
-运行所有测试：
+## 测试与检查
+
+运行测试：
 
 ```bash
 cargo test
 ```
 
-运行格式化和 lint 检查：
+检查格式：
 
 ```bash
-cargo fmt
-cargo clippy
+cargo fmt --check
 ```
 
-## 演示脚本
+运行 Clippy：
 
-1. 展示 README 和 `knowledge_base` 正式知识库目录。
-2. 运行 `cargo run -- index knowledge_base` 构建索引。
-3. 运行 `cargo run -- stats` 查看索引统计。
-4. 运行 `cargo run -- search ownership` 展示英文搜索。
-5. 运行 `cargo run -- search 所有权` 展示中文搜索。
-6. 运行 `cargo run -- terms` 展示高频词。
-7. 运行 `cargo run -- inspect 0` 展示单文档分析。
-8. 运行 `cargo run -- report` 导出 Markdown 报告。
-9. 运行 `cargo run -- tui` 展示 TUI 搜索界面。
-10. 在 TUI 中搜索关键词，演示高亮片段、Enter 打开文件和鼠标点击打开文件。
-11. 简要介绍核心实现：倒排索引、BM25、PDF 提取、`Tokenizer` trait、`Result` 错误处理、`rayon` 并发和模块化设计。
+```bash
+cargo clippy -- -D warnings
+```
+
+提交前推荐完整执行：
+
+```bash
+cargo fmt --check
+cargo clippy -- -D warnings
+cargo test
+```
+
+## PDF 支持说明
+
+CheeseBase 当前支持文本型 PDF。也就是说，PDF 中的正文需要能够被复制、选中，程序才能通过 `pdf-extract` 提取文本并建立索引。
+
+如果 PDF 是扫描图片生成的，正文实际是图片，不是文本。当前版本暂不支持 OCR。后续可以接入 Tesseract OCR 或 PaddleOCR，将扫描图片识别为文本后再进入索引流程。
+
+## 常见问题
+
+### cargo 命令不可用
+
+请确认 Rust 已安装，并且 Cargo 路径已加入环境变量：
+
+```text
+C:\Users\<你的用户名>\.cargo\bin
+```
+
+重新打开终端后再执行：
+
+```bash
+cargo --version
+```
+
+### 找不到 Cargo.toml
+
+需要在项目根目录运行 Cargo 命令：
+
+```bash
+cd rust-note-search
+cargo build
+```
+
+### Hybrid 搜索失败
+
+请检查：
+
+- `.env` 是否存在。
+- `EMBED_API_KEY` 是否填写。
+- Qdrant 是否已经启动。
+- `QDRANT_URL` 是否能访问。
+- 是否已经执行 `cargo run -- vector-index`。
+
+## 演示建议
+
+推荐演示顺序：
+
+1. 展示 `knowledge_base/` 多级目录。
+2. 运行 `cargo run -- index knowledge_base`。
+3. 运行 `cargo run -- stats`。
+4. 运行 `cargo run -- search ownership --strategy bm25`。
+5. 运行 `cargo run -- search 事务 --strategy hybrid`。
+6. 运行 `cargo run -- terms`。
+7. 运行 `cargo run -- tui`。
+8. 在 TUI 中演示 `/help`、`/files`、`/strategy`、`/select`、`/update`。
+
+## 安全说明
+
+- `.env` 中可能包含真实 API Key，不能提交到 GitHub。
+- `.env.example` 只包含示例配置和占位符，可以提交。
+- `target/` 是编译产物，不需要提交。
+- `index.json` 是本地生成的索引文件，通常不需要提交。

@@ -2,12 +2,14 @@ use clap::Parser;
 
 use rust_note_search::analysis;
 use rust_note_search::cli::{Cli, Command};
+use rust_note_search::config::AppConfig;
 use rust_note_search::error::AppResult;
+use rust_note_search::hybrid::search_with_strategy;
 use rust_note_search::index::IndexBuilder;
 use rust_note_search::parser::SimpleTokenizer;
 use rust_note_search::report;
-use rust_note_search::search::{SearchEngine, SearchOptions};
-use rust_note_search::{storage, ui};
+use rust_note_search::search::SearchOptions;
+use rust_note_search::{storage, ui, vector};
 
 fn main() {
     if let Err(err) = run() {
@@ -38,15 +40,25 @@ fn run() -> AppResult<()> {
             index,
             limit,
             mode,
+            strategy,
         } => {
             let index = storage::load_index(&index)?;
-            let engine = SearchEngine::new(&index, tokenizer);
-            let results = engine.search_with_options(
+            let strategy = strategy.into();
+            let config = if matches!(strategy, rust_note_search::model::SearchStrategy::Hybrid) {
+                Some(AppConfig::from_env()?)
+            } else {
+                None
+            };
+            let results = search_with_strategy(
+                &index,
+                tokenizer,
                 &query,
                 SearchOptions {
                     limit,
                     mode: mode.into(),
                 },
+                strategy,
+                config.as_ref(),
             )?;
             if results.is_empty() {
                 println!("No results for \"{query}\".");
@@ -67,6 +79,15 @@ fn run() -> AppResult<()> {
                     );
                 }
             }
+        }
+        Command::VectorIndex { index } => {
+            let index = storage::load_index(&index)?;
+            let config = AppConfig::from_env()?;
+            let stats = vector::build_vector_index(&index, &config)?;
+            println!(
+                "Indexed {} vector chunks into Qdrant collection {}.",
+                stats.chunk_count, stats.collection
+            );
         }
         Command::Stats { index } => {
             let index = storage::load_index(&index)?;

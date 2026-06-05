@@ -21,12 +21,15 @@ use ratatui::widgets::{Block, Borders, List, ListItem, ListState, Paragraph};
 use unicode_width::UnicodeWidthChar;
 
 use crate::analysis;
+use crate::config::AppConfig;
 use crate::error::AppResult;
+use crate::hybrid::search_with_strategy;
 use crate::index::IndexBuilder;
-use crate::model::{InvertedIndex, SearchResult, SearchState};
+use crate::model::{InvertedIndex, SearchResult, SearchState, SearchStrategy};
 use crate::parser::Tokenizer;
-use crate::search::SearchEngine;
+use crate::search::SearchOptions;
 use crate::storage;
+use crate::vector;
 
 const TUI_LIMIT: usize = 25;
 const TERMS_LIMIT: usize = 20;
@@ -107,6 +110,7 @@ enum TuiView {
     Files,
     Terms,
     Stats,
+    Strategy,
 }
 
 struct TuiApp<T>
@@ -124,8 +128,11 @@ where
     selected: usize,
     state: SearchState,
     status: String,
+    strategy: SearchStrategy,
     results_area: Option<Rect>,
     content_area: Option<Rect>,
+    bm25_strategy_area: Option<Rect>,
+    hybrid_strategy_area: Option<Rect>,
     content_scroll: usize,
 }
 
@@ -146,8 +153,11 @@ where
             selected: 0,
             state: SearchState::Empty,
             status: "输入 /help 查看命令，输入 /select 进入搜索。".to_string(),
+            strategy: SearchStrategy::Bm25,
             results_area: None,
             content_area: None,
+            bm25_strategy_area: None,
+            hybrid_strategy_area: None,
             content_scroll: 0,
         }
     }
@@ -216,6 +226,19 @@ where
                 self.content_scroll = 0;
                 self.open_selected_result();
             }
+            MouseEventKind::Down(MouseButton::Left) if self.view == TuiView::Strategy => {
+                if self
+                    .bm25_strategy_area
+                    .is_some_and(|area| point_in_rect(area, mouse.column, mouse.row))
+                {
+                    self.select_strategy(SearchStrategy::Bm25)?;
+                } else if self
+                    .hybrid_strategy_area
+                    .is_some_and(|area| point_in_rect(area, mouse.column, mouse.row))
+                {
+                    self.select_strategy(SearchStrategy::Hybrid)?;
+                }
+            }
             MouseEventKind::ScrollDown => {
                 if self.is_in_content(mouse.column, mouse.row) {
                     self.scroll_content(3);
@@ -253,6 +276,7 @@ where
             "/files" => self.switch_view(TuiView::Files, "正在展示当前索引中的知识库目录。"),
             "/terms" => self.switch_view(TuiView::Terms, "正在展示当前索引的高频词。"),
             "/stats" => self.switch_view(TuiView::Stats, "正在展示索引统计信息。"),
+            "/strategy" => self.switch_view(TuiView::Strategy, "请用鼠标点击选择检索方式。"),
             "/home" => self.switch_view(
                 TuiView::Home,
                 "输入 /help 查看命令，输入 /select 进入搜索。",
@@ -275,6 +299,24 @@ where
         }
 
         Ok(false)
+    }
+
+    fn select_strategy(&mut self, strategy: SearchStrategy) -> AppResult<()> {
+        self.strategy = strategy;
+        let status = format!("当前检索方式：{}", strategy_label(strategy));
+        let previous = self
+            .view_history
+            .pop()
+            .filter(|view| *view != TuiView::Strategy)
+            .unwrap_or(TuiView::Search);
+        self.set_view(previous, status);
+        if self.view == TuiView::Search {
+            self.input.set_text(&self.last_search_query);
+            self.refresh_search()?;
+        } else {
+            self.input.clear();
+        }
+        Ok(())
     }
 
     fn switch_view(&mut self, view: TuiView, status: impl Into<String>) {
@@ -313,27 +355,38 @@ where
             return Ok(());
         }
 
-        let previous_index = self.index.clone();
         let builder = IndexBuilder::new(self.tokenizer.clone());
         match builder.build(&root).and_then(|new_index| {
+            let vector_status = if self.strategy == SearchStrategy::Hybrid {
+                let config = AppConfig::from_env()?;
+                let stats = vector::build_vector_index(&new_index, &config)?;
+                format!(
+                    " 向量索引已更新：{} 个片段写入 {}。",
+                    stats.chunk_count, stats.collection
+                )
+            } else {
+                String::new()
+            };
             storage::save_index(&self.index_path, &new_index)?;
-            Ok(new_index)
+            Ok((new_index, vector_status))
         }) {
-            Ok(new_index) => {
+            Ok((new_index, vector_status)) => {
                 self.index = new_index;
-                self.status = format!(
-                    "索引已更新：{} 个文档，{} 个词项。知识库根目录：{}",
+                let update_status = format!(
+                    "索引已更新：{} 个文档，{} 个词项。知识库根目录：{}{}",
                     self.index.metadata.document_count,
                     self.index.metadata.term_count,
-                    self.index.metadata.root.display()
+                    self.index.metadata.root.display(),
+                    vector_status
                 );
+                self.status = update_status.clone();
                 if self.view == TuiView::Search {
                     self.input.set_text(&self.last_search_query);
                     self.refresh_search()?;
+                    self.status = update_status;
                 }
             }
             Err(err) => {
-                self.index = previous_index;
                 self.status = format!("更新失败：{err}");
             }
         }
@@ -350,8 +403,22 @@ where
             return Ok(());
         }
 
-        let engine = SearchEngine::new(&self.index, self.tokenizer.clone());
-        self.results = engine.search(query, TUI_LIMIT)?;
+        let config = if self.strategy == SearchStrategy::Hybrid {
+            Some(AppConfig::from_env()?)
+        } else {
+            None
+        };
+        self.results = search_with_strategy(
+            &self.index,
+            self.tokenizer.clone(),
+            query,
+            SearchOptions {
+                limit: TUI_LIMIT,
+                mode: crate::model::SearchMode::Any,
+            },
+            self.strategy,
+            config.as_ref(),
+        )?;
         self.selected = self.selected.min(self.results.len().saturating_sub(1));
         self.content_scroll = 0;
         self.state = if self.results.is_empty() {
@@ -363,8 +430,9 @@ where
             self.status = "没有匹配结果。请修改关键词，或输入 /help 查看命令。".to_string();
         } else {
             self.status = format!(
-                "找到 {} 条结果。按回车或点击结果可打开文件。",
-                self.results.len()
+                "找到 {} 条结果。当前检索方式：{}。按回车或点击结果可打开文件。",
+                self.results.len(),
+                strategy_label(self.strategy)
             );
         }
         Ok(())
@@ -472,6 +540,8 @@ where
 
         if self.view == TuiView::Search {
             self.draw_search(frame, chunks[1]);
+        } else if self.view == TuiView::Strategy {
+            self.draw_strategy_page(frame, chunks[1]);
         } else {
             self.draw_page(frame, chunks[1]);
         }
@@ -487,6 +557,7 @@ where
     fn draw_input(&self, frame: &mut ratatui::Frame, area: Rect) {
         let title = match self.view {
             TuiView::Search => "搜索或命令",
+            TuiView::Strategy => "命令 - 策略选择页支持鼠标点击",
             _ => "命令",
         };
         let input = Paragraph::new(self.input.text())
@@ -503,6 +574,8 @@ where
     }
 
     fn draw_search(&mut self, frame: &mut ratatui::Frame, area: Rect) {
+        self.bm25_strategy_area = None;
+        self.hybrid_strategy_area = None;
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([Constraint::Ratio(3, 5), Constraint::Ratio(2, 5)])
@@ -565,6 +638,8 @@ where
 
     fn draw_page(&mut self, frame: &mut ratatui::Frame, area: Rect) {
         self.results_area = None;
+        self.bm25_strategy_area = None;
+        self.hybrid_strategy_area = None;
         self.content_area = Some(area);
         let lines = self.content_lines(area);
         let visible_rows = area.height.saturating_sub(2) as usize;
@@ -581,6 +656,91 @@ where
         frame.render_widget(page, area);
     }
 
+    fn draw_strategy_page(&mut self, frame: &mut ratatui::Frame, area: Rect) {
+        self.results_area = None;
+        self.content_area = Some(area);
+        let block = Block::default().borders(Borders::ALL).title("检索方式");
+        let inner = block.inner(area);
+        frame.render_widget(block, area);
+
+        let rows = Layout::default()
+            .direction(Direction::Vertical)
+            .constraints([
+                Constraint::Length(3),
+                Constraint::Length(8),
+                Constraint::Length(1),
+                Constraint::Length(8),
+                Constraint::Min(1),
+            ])
+            .split(inner);
+
+        frame.render_widget(
+            Paragraph::new(vec![
+                Line::from(vec![
+                    Span::styled("当前检索方式：", Style::default().fg(Color::Green)),
+                    Span::styled(
+                        strategy_label(self.strategy),
+                        Style::default()
+                            .fg(Color::Yellow)
+                            .add_modifier(Modifier::BOLD),
+                    ),
+                ]),
+                Line::from("请用鼠标点击下面的选项。选择后会返回上一页或搜索页。"),
+            ]),
+            rows[0],
+        );
+
+        self.bm25_strategy_area = Some(rows[1]);
+        self.hybrid_strategy_area = Some(rows[3]);
+        self.draw_strategy_card(
+            frame,
+            rows[1],
+            "BM25 (default)",
+            "本地关键词检索。使用倒排索引和 BM25 公式，适合精确词、代码符号、术语搜索；不依赖网络、API Key 或 Qdrant。",
+            self.strategy == SearchStrategy::Bm25,
+        );
+        self.draw_strategy_card(
+            frame,
+            rows[3],
+            "Hybrid",
+            "混合检索。先用 BM25 找关键词候选，再用 Qdrant 向量检索召回语义相近片段，按 0.45*BM25 + 0.55*Vector 排序；最终分数默认需达到 0.45 才会展示，可用 HYBRID_SCORE_THRESHOLD 调整。",
+            self.strategy == SearchStrategy::Hybrid,
+        );
+    }
+
+    fn draw_strategy_card(
+        &self,
+        frame: &mut ratatui::Frame,
+        area: Rect,
+        title: &'static str,
+        description: &'static str,
+        selected: bool,
+    ) {
+        let style = if selected {
+            Style::default()
+                .fg(Color::Black)
+                .bg(Color::LightYellow)
+                .add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        let block = Block::default()
+            .borders(Borders::ALL)
+            .title(title)
+            .style(style);
+        let mut lines = vec![Line::from(if selected {
+            "已选择"
+        } else {
+            "点击选择"
+        })];
+        append_plain_wrapped_lines(
+            &mut lines,
+            description,
+            area.width.saturating_sub(2) as usize,
+        );
+        frame.render_widget(Paragraph::new(lines).block(block), area);
+    }
+
     fn view_title(&self) -> &'static str {
         match self.view {
             TuiView::Home => "首页",
@@ -589,6 +749,7 @@ where
             TuiView::Files => "知识库目录",
             TuiView::Terms => "高频词",
             TuiView::Stats => "索引统计",
+            TuiView::Strategy => "检索方式",
         }
     }
 
@@ -599,6 +760,7 @@ where
             TuiView::Files => self.file_tree_lines(),
             TuiView::Terms => self.term_lines(),
             TuiView::Stats => self.stats_lines(),
+            TuiView::Strategy => Vec::new(),
             TuiView::Search => self.search_preview_lines(area),
         }
     }
@@ -655,11 +817,14 @@ where
             "/files   展示当前索引中的知识库目录树。",
             "/terms   按词频展示高频关键词。",
             "/stats   展示索引统计信息。",
+            "/strategy  打开检索方式选择页，可用鼠标选择 BM25(default) 或 Hybrid。",
             "/update  从当前知识库根目录重新构建索引并保存。",
             "/clear   清空当前搜索关键词和结果。",
             "/quit    退出 TUI。",
             "",
-            "提示：这些页面都基于当前索引。修改知识库文件后，请输入 /update 刷新。",
+            "提示：BM25 是默认本地检索；Hybrid 会混合 BM25 与 Qdrant 向量检索，需要 Qdrant 与阿里云百炼 Embedding 配置。",
+            "提示：Hybrid 默认只展示最终分数 >= 0.45 的结果，可通过 HYBRID_SCORE_THRESHOLD 调整。",
+            "提示：Hybrid 模式下输入 /update 会同时更新本地索引和 Qdrant 向量索引。",
         ]
         .into_iter()
         .map(Line::from)
@@ -820,6 +985,20 @@ fn point_in_inner_area(area: Rect, column: u16, row: u16) -> bool {
     let inner_bottom = area.y.saturating_add(area.height.saturating_sub(1));
 
     column >= inner_left && column < inner_right && row >= inner_top && row < inner_bottom
+}
+
+fn point_in_rect(area: Rect, column: u16, row: u16) -> bool {
+    column >= area.x
+        && column < area.x.saturating_add(area.width)
+        && row >= area.y
+        && row < area.y.saturating_add(area.height)
+}
+
+fn strategy_label(strategy: SearchStrategy) -> &'static str {
+    match strategy {
+        SearchStrategy::Bm25 => "BM25",
+        SearchStrategy::Hybrid => "Hybrid",
+    }
 }
 
 fn styled_line(text: impl Into<String>, color: Color, modifier: Modifier) -> Line<'static> {
@@ -1297,6 +1476,46 @@ mod tests {
 
         assert!(!should_quit);
         assert_eq!(app.view, TuiView::Search);
+    }
+
+    #[test]
+    fn slash_strategy_enters_strategy_view() {
+        let temp = tempdir().expect("tempdir");
+        fs::write(temp.path().join("note.md"), "# Note\nRust").expect("write");
+        let index = IndexBuilder::new(SimpleTokenizer::default())
+            .build(temp.path())
+            .expect("build");
+        let mut app = TuiApp::new(
+            index,
+            temp.path().join("index.json"),
+            SimpleTokenizer::default(),
+        );
+
+        app.input.set_text("/strategy");
+        let should_quit = app.execute_command().expect("command");
+
+        assert!(!should_quit);
+        assert_eq!(app.view, TuiView::Strategy);
+    }
+
+    #[test]
+    fn strategy_selection_changes_current_strategy() {
+        let temp = tempdir().expect("tempdir");
+        fs::write(temp.path().join("note.md"), "# Note\nRust").expect("write");
+        let index = IndexBuilder::new(SimpleTokenizer::default())
+            .build(temp.path())
+            .expect("build");
+        let mut app = TuiApp::new(
+            index,
+            temp.path().join("index.json"),
+            SimpleTokenizer::default(),
+        );
+
+        app.switch_view(TuiView::Strategy, "choose");
+        app.select_strategy(SearchStrategy::Hybrid).expect("select");
+
+        assert_eq!(app.strategy, SearchStrategy::Hybrid);
+        assert_eq!(app.view, TuiView::Home);
     }
 
     #[test]

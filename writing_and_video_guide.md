@@ -2,7 +2,7 @@
 
 本文档用于辅助完成 Rust 大作业的实验报告和展示视频。它不是 README 的重复说明，而是从“如何向老师讲清楚这个项目”的角度整理当前项目的亮点、报告结构、展示脚本和 Rust 特色对应关系。
 
-项目当前定位：`RustNoteSearch` 是一个本地知识库搜索系统。正式知识库目录为 `knowledge_base/`，程序可以递归扫描 Markdown、文本、Rust 源码、TOML 和文本型 PDF，建立倒排索引，使用 BM25 排序，并提供 CLI 与 TUI 两种使用方式。
+项目当前定位：`RustNoteSearch` 是一个本地知识库搜索系统。正式知识库目录为 `knowledge_base/`，程序可以递归扫描 Markdown、文本、Rust 源码、TOML 和文本型 PDF，建立倒排索引，使用 BM25 排序，并支持 Qdrant + 阿里云百炼 Embedding 的 Hybrid 混合检索。
 
 ## 1. 报告写作总思路
 
@@ -40,10 +40,10 @@
 - 支持 `knowledge_base/` 多级目录。
 - 支持 `.md`、`.txt`、`.rs`、`.toml`、`.pdf`。
 - 支持构建索引、保存索引和加载索引。
-- 支持关键词搜索、BM25 排序、命中片段展示。
+- 支持关键词搜索、BM25 排序、Qdrant 混合检索和命中片段展示。
 - 支持 PDF 页码显示。
 - 支持 TUI 首页、命令模式、搜索页面、文件目录、高频词和统计信息。
-- 支持在 TUI 中通过 `/update` 更新索引。
+- 支持在 TUI 中通过 `/strategy` 选择 BM25 或 Hybrid，并通过 `/update` 更新索引。
 
 非功能需求：
 
@@ -459,12 +459,13 @@ tree knowledge_base /F
 
 ```bash
 cargo run -- index knowledge_base
+cargo run -- vector-index
 ```
 
 旁白重点：
 
 ```text
-这里程序会递归扫描 knowledge_base 中的多级目录，过滤支持的文件类型，然后使用 rayon 并发解析文件。每个文件会被解析成 ParsedDocument，再汇总成 InvertedIndex。索引最终保存为 index.json。
+这里程序会递归扫描 knowledge_base 中的多级目录，过滤支持的文件类型，然后使用 rayon 并发解析文件。每个文件会被解析成 ParsedDocument，再汇总成 InvertedIndex。随后 vector-index 会把文档切成片段，调用阿里云百炼 Embedding，并写入本地 Qdrant 的 cheesebase_chunks 集合。
 ```
 
 可以切到 `src/index.rs`，展示：
@@ -493,15 +494,15 @@ stats 展示当前知识库的文档数、词项数、总 token 数和最大文�
 展示命令：
 
 ```bash
-cargo run -- search ownership
-cargo run -- search 事务
+cargo run -- search ownership --strategy bm25
+cargo run -- search 事务 --strategy hybrid
 cargo run -- search "rust ownership" --mode all
 ```
 
 旁白重点：
 
 ```text
-搜索阶段使用 BM25 算法排序，而不是简单词频排序。BM25 会考虑词频、文档长度和词项区分度，所以更适合知识库检索。中文搜索由 jieba-rs 分词支持，英文和代码标识符会统一转为小写 token。
+搜索阶段默认使用 BM25 算法排序，而不是简单词频排序。Hybrid 模式会同时使用 BM25 和 Qdrant 向量检索，并按 0.45 * BM25 + 0.55 * Vector 的公式融合得分。系统还设置了默认 0.45 的入选阈值，低于阈值的候选不会展示，从而减少不相关结果。
 ```
 
 如果展示 PDF：
@@ -531,13 +532,14 @@ cargo run -- tui
 /files
 /terms
 /stats
+/strategy
 /select
 ```
 
 旁白重点：
 
 ```text
-TUI 启动后首先进入 Cheese base 首页，展示知识库摘要和命令提示。这里使用 TuiView 枚举管理不同页面状态，例如 Home、Help、Files、Terms、Stats 和 Search。用户可以通过 slash 命令切换页面，也可以在修改 knowledge_base 后使用 /update 重新构建索引。
+TUI 启动后首先进入 Cheese base 首页，展示知识库摘要和命令提示。这里使用 TuiView 枚举管理不同页面状态，例如 Home、Help、Files、Terms、Stats、Strategy 和 Search。输入 /strategy 后会进入检索方式选择页，用户可以用鼠标点击 BM25(default) 或 Hybrid。
 ```
 
 进入搜索页后搜索：
@@ -599,9 +601,10 @@ ownership
 
 ```bash
 cargo run -- index knowledge_base
+cargo run -- vector-index
 cargo run -- stats
-cargo run -- search ownership
-cargo run -- search 事务
+cargo run -- search ownership --strategy bm25
+cargo run -- search 事务 --strategy hybrid
 cargo run -- tui
 ```
 
@@ -623,17 +626,18 @@ cargo run -- report
 4. 输入 `/files` 展示知识库目录。
 5. 输入 `/terms` 展示高频词。
 6. 输入 `/stats` 展示索引统计。
-7. 输入 `/select` 进入搜索。
-8. 搜索 `ownership`。
-9. 搜索 `事务`。
-10. 展示 Preview 滚动。
-11. 按 Enter 打开文件。
-12. 回到首页或退出。
+7. 输入 `/strategy`，鼠标点击选择 `BM25 (default)` 或 `Hybrid`。
+8. 输入 `/select` 进入搜索。
+9. 搜索 `ownership`。
+10. 搜索 `事务`。
+11. 展示 Preview 滚动。
+12. 按 Enter 打开文件。
+13. 回到首页或退出。
 
 可以提一句：
 
 ```text
-如果我手动添加或删除 knowledge_base 中的文件，只需要在 TUI 中输入 /update，就会重新扫描当前知识库并刷新索引。
+如果我手动添加或删除 knowledge_base 中的文件，只需要在 TUI 中输入 /update，就会重新扫描当前知识库并刷新索引。当前策略是 Hybrid 时，/update 还会同步刷新 Qdrant 向量索引。
 ```
 
 ### 4.5 常见问题与规避
@@ -740,8 +744,10 @@ cargo run -- index knowledge_base
 - `cargo clippy -- -D warnings` 通过。
 - `cargo test` 通过。
 - `cargo run -- index knowledge_base` 可以生成索引。
+- `cargo run -- vector-index` 可以写入 Qdrant 向量索引。
 - `cargo run -- stats` 显示 root 为 `knowledge_base`。
-- `cargo run -- search ownership` 有结果。
-- `cargo run -- search 事务` 有结果。
+- `cargo run -- search ownership --strategy bm25` 有结果。
+- `cargo run -- search 事务 --strategy hybrid` 有结果。
 - `cargo run -- tui` 可以进入首页和搜索页。
+- TUI 中 `/strategy` 可以用鼠标选择 BM25 或 Hybrid。
 - 视频中能清晰展示 Rust 特性，而不只是展示界面。

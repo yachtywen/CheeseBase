@@ -1,6 +1,9 @@
 pub mod analysis;
 pub mod cli;
+pub mod config;
+pub mod embedding;
 pub mod error;
+pub mod hybrid;
 pub mod index;
 pub mod model;
 pub mod parser;
@@ -9,3 +12,4 @@ pub mod scanner;
 pub mod search;
 pub mod storage;
 pub mod ui;
+pub mod vector;

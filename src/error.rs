@@ -21,6 +21,18 @@ pub enum AppError {
     #[error("terminal error: {0}")]
     Terminal(String),
 
+    #[error("configuration error: {0}")]
+    Config(String),
+
+    #[error("HTTP error: {0}")]
+    Http(#[from] reqwest::Error),
+
+    #[error("embedding error: {0}")]
+    Embedding(String),
+
+    #[error("Qdrant error: {0}")]
+    Qdrant(String),
+
     #[error("path does not exist: {0}")]
     MissingPath(PathBuf),
 

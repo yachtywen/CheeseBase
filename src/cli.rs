@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::model::SearchMode;
+use crate::model::{SearchMode, SearchStrategy};
 
 #[derive(Debug, Parser)]
 #[command(name = "rust-note-search")]
@@ -41,6 +41,17 @@ pub enum Command {
         /// Match any query term or require all query terms.
         #[arg(short, long, value_enum, default_value_t = CliSearchMode::Any)]
         mode: CliSearchMode,
+
+        /// Retrieval strategy.
+        #[arg(long, value_enum, default_value_t = CliSearchStrategy::Bm25)]
+        strategy: CliSearchStrategy,
+    },
+
+    /// Build the Qdrant vector index from an existing JSON index.
+    VectorIndex {
+        /// JSON index file.
+        #[arg(short, long, default_value = "index.json")]
+        index: PathBuf,
     },
 
     /// Show index statistics.
@@ -104,11 +115,26 @@ pub enum CliSearchMode {
     All,
 }
 
+#[derive(Debug, Clone, Copy, ValueEnum)]
+pub enum CliSearchStrategy {
+    Bm25,
+    Hybrid,
+}
+
 impl From<CliSearchMode> for SearchMode {
     fn from(value: CliSearchMode) -> Self {
         match value {
             CliSearchMode::Any => SearchMode::Any,
             CliSearchMode::All => SearchMode::All,
+        }
+    }
+}
+
+impl From<CliSearchStrategy> for SearchStrategy {
+    fn from(value: CliSearchStrategy) -> Self {
+        match value {
+            CliSearchStrategy::Bm25 => SearchStrategy::Bm25,
+            CliSearchStrategy::Hybrid => SearchStrategy::Hybrid,
         }
     }
 }
